@@ -1,13 +1,10 @@
-
-export type GoogleSheetRow = [
-  string, // name
-  string, // price
-  string?  // stock
-];
+export type GoogleSheetRow = string[];
 
 export interface Product {
+  category: string,
+  subcategory: string,
   name: string,
-  price: number,
-  stock: string,
+  price: Record<string, number>,
+  description: string,
   last_synced_at: string
 }

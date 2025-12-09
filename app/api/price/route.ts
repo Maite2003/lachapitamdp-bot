@@ -1,12 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get('q');
 
   if (!query) {
-    return NextResponse.json({ error: "Escribe algo para buscar (ej: ?q=malta)" }, { status: 400 });
+    return NextResponse.json({ error: "Escribe algo para buscar (ej: ?q=pilsen)" }, { status: 400 });
   }
 
   const supabase = createClient(
@@ -16,17 +18,17 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await supabase
     .from('products')
-    .select('name, price, stock')
-    .ilike('name', `%${query}%`)
-    .limit(5); // Max 5
+    .select('category, subcategory, name, price, description')
+    .or(`name.ilike.%${query}%,description.ilike.%${query}%`)
+    .limit(10); 
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
   return NextResponse.json({ 
-    busqueda: query,
-    encontrados: data?.length || 0,
-    resultados: data 
+    search: query,
+    found: data?.length || 0,
+    results: data 
   });
 }
