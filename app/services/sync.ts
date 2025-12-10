@@ -42,7 +42,7 @@ function sanitizeKey(header: string): string {
     .toLowerCase()
     .replace(/^p\.\s*/, '') // Remove "P."
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove accents
-    .replace(/[^a-z0-9]/g, '_') // Replace other characters with _
+    // .replace(/[^a-z0-9]/g, '') // Replace other characters with _
     .replace(/_+/g, '_'); // Avoid doubles _ (__)
 }
 
@@ -52,6 +52,7 @@ export async function formatRows(rows: GoogleSheetRow[]) {
   const headers = rows[0];
   const dataRows = rows.slice(1);
   const priceColumnIndex: number[] = [];
+  const descriptionIndex = headers.findIndex(h => h.toLowerCase().includes('descripci'));
 
   headers.forEach((header, index) => {
     if (header.trim().startsWith('P.')) {
@@ -80,7 +81,7 @@ export async function formatRows(rows: GoogleSheetRow[]) {
         subcategory: row[1] || 'General',
         name: row[2] || 'Producto sin nombre',
         price: precios,
-        description: row[row.length - 1] || '', 
+        description: row[descriptionIndex] || '', 
         last_synced_at: new Date().toISOString()
       };
     });
