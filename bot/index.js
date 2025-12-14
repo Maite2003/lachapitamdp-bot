@@ -1,12 +1,32 @@
 const wppconnect = require('@wppconnect-team/wppconnect');
+const { handleProductSearch, showSchedule, processSmartOrder, sendWelcome, finalizeOrder } = require('./src/flows/steps');
+const { detectIntention } = require('./src/services/api');
 
-const API_URL = 'http://localhost:3000/api/chat';
+
+const STATUS  = {
+  MAKING_CART: 'MAKING_CART',
+  MENU: 'MENU',
+  WAITING_NAME: 'WAITING_NAME',
+  WAITING_ADDRESS: 'WAITING_ADDRESS',
+  WAITING_DELIVERY: 'WAITING_DELIVERY',
+};
+
+const INTENTS = {
+  SCHEDULE_REQUEST: "INFO_HORARIOS",
+  ADDRESS_REQUEST: "INFO_UBICACION",
+  PRICE_REQUEST: "CONSULTA_PRECIO",
+  ORDER: "INTENCION_COMPRA",
+  FINISH_ORDER: "FINALIZAR_COMPRA",
+  CANCEL: "CANCELAR",
+  HELLO: "SALUDO",
+  OTHER: "OTRO",
+};
 
 // WPPConnect
 wppconnect.create({
   session: 'lachapita-session',
   headless: true,
-  useChrome: true,
+  useChrome: false,
   puppeteerOptions: {
     userDataDir: './tokens',
     args: [
@@ -15,11 +35,13 @@ wppconnect.create({
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-zygote',
-      '--single-process',
     ]
   }
 })
-  .then((client) => handleMessage(client, message))
+  .then((client) => {
+    console.log('Bot iniciado correctamente 🚀');
+    start(client);
+  })
   .catch((error) => console.log(error));
 
 
@@ -27,9 +49,51 @@ const activeSessions = new Map();
 
 const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes active then reset
 
+function start(client) {
+  client.onMessage((message) => {
+    handleMessage(client, message);
+  });
+}
+
+function updateSessionState(userPhone, newStep) {
+  let session = activeSessions.get(userPhone);
+
+  if (!session) {
+    session = {
+      step: newStep,
+      lastInteraction: Date.now(),
+      orderData: {}
+    };
+  } else {
+    session.step = newStep;
+    session.lastInteraction = Date.now();
+  }
+  activeSessions.set(userPhone, session);
+
+  console.log(`🔄 Usuario ${userPhone} cambió de estado a: [${newStep}]`);
+}
+
+async function statusReminder(client, userPhone, session) {
+  await new Promise(r => setTimeout(r, 1000));
+
+  switch (session.step) {
+    case STATUS.WAITING_NAME:
+      await client.sendText(userPhone, "👇 (Seguimos) ¿Me decías tu nombre?");
+      break;
+    case STATUS.WAITING_ADDRESS:
+      await client.sendText(userPhone, "👇 (Seguimos) ¿Cuál era la dirección de envío?");
+      break;
+    case STATUS.MAKING_CART:
+      await client.sendText(userPhone, "🛒 ¿Querés agregar algo más al carrito o confirmamos?");
+      break;
+  }
+}
+
 async function handleMessage(client, message) {
   const userPhone = message.from;
   const now = Date.now();
+
+  console.log(`Recibi mensaje de ${userPhone}`);
 
   if (activeSessions.has(userPhone)) {
     const session = activeSessions.get(userPhone);
@@ -39,59 +103,123 @@ async function handleMessage(client, message) {
       // Reset conv
       console.log(`Sesión expirada para ${userPhone}. Reiniciando.`);
       activeSessions.delete(userPhone);
+      handleNew(client, userPhone);
     } else {
       // Update timestamp
       session.lastInteraction = now;
       activeSessions.set(userPhone, session);
-      const step = message.body;
 
-      switch (step) {
-        case '1':
-          showSchedule();
-          break;
-        case '2':
-          askPrices();
-          break;
-        case '3':
-          makePurchase();
-          break;
-        default:
+      const intent = await detectIntention(message.body)
+      console.log(`🧠 IA detectó intención: ${intent}`);
 
+      // Informative questions
+      if (intent === INTENTS.ADDRESS_REQUEST || intent === INTENTS.SCHEDULE_REQUEST) {
+        await showSchedule(client, userPhone);
+        await statusReminder(client, userPhone, session);
+        return;
       }
-      return;
-    }
-  }
+      // exit
+      if (intent === INTENTS.CANCEL || (intent === INTENTS.HELLO && session.step !== STATUS.MENU)) {
+        await client.sendText(userPhone, "🔄 Operación cancelada. Volvemos al inicio.");
+        updateSessionState(userPhone, STATUS.MENU);
+        await sendWelcome(client, userPhone);
+        return;
+      }
 
-  handleNew(client, userPhone);
+      switch(session.step) {
+        case STATUS.MENU:
+          switch (intent) {
+            case INTENTS.OTHER:
+              await client.sendText(userPhone, "Perdon, no entiendo lo que queres decir. Intenta escribirlo con otras palabras");
+              break;
+            case INTENTS.PRICE_REQUEST:
+              await handleProductSearch(client, message);
+              break;
+            case INTENTS.ORDER:
+              await client.sendText('¡Dale, genial! 🍻 Para armar tu carrito, escribime en un solo mensaje qué productos necesitás y la cantidad')
+          }
+          break;
+
+        case STATUS.MAKING_CART:
+          switch (intent) {
+            case INTENTS.ORDER:
+              await processSmartOrder(client, userPhone, session, message.body);
+            case INTENTS.FINISH_ORDER:
+              await finalizeOrder(client, userPhone, session);
+              break;
+
+            case INTENTS.HELLO:
+              await sendWelcome(client, userPhone);
+              break;
+
+            default:
+              await processSmartOrder(client, userPhone, session, message.body);
+          }
+          break;
+
+        case STATUS.WAITING_NAME:
+          const rawName = message.body.trim();
+          if (rawName.split(' ').length < 2) {
+            await client.sendText(userPhone, "Por favor escribí Nombre y Apellido completo.");
+            return;
+          }
+
+          const name = rawName.split(' ')
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(' ');
+
+          session.orderData.cliente_nombre = name;
+
+          await client.sendText(userPhone, `Gracias ${name}. \n¿El pedido es para *Envío* o *Retiro*?`);
+          updateSessionState(userPhone, STATUS.WAITING_DELIVERY);
+          break;
+
+        case STATUS.WAITING_DELIVERY:
+          const resp = message.body.toLowerCase();
+          if (resp.includes('envio') || resp.includes('domicilio')) {
+            session.orderData.tipo_entrega = 'envio';
+            await client.sendText(userPhone, "📍 ¿A qué *dirección* enviamos?");
+            updateSessionState(userPhone, STATUS.WAITING_ADDRESS);
+          } else if (resp.includes('retiro') || resp.includes('local')) {
+            session.orderData.tipo_entrega = 'retiro';
+            await finalizeOrder(client, userPhone, session);
+            updateSessionState(userPhone, STATUS.MENU);
+          } else {
+            await client.sendText(userPhone, "Escribí 'Envío' o 'Retiro'.");
+          }
+          break;
+
+        case STATUS.WAITING_ADDRESS:
+          const check = await validateAddress(message.body);
+          if (check.valid) {
+            session.orderData.direccion = check.formatted_address || message.body;
+            await finalizeOrder(client, userPhone, session);
+            updateSessionState(userPhone, STATUS.MENU);
+          } else {
+            await client.sendText(userPhone, `⚠️ Dirección no válida: ${check.reason}`);
+          }
+          break;
+      }
+    }
+    return;
+  }
+  handleNew(client, userPhone, now);
+  return;
 }
 
-async function handleNew(client, userPhone) {
+async function handleNew(client, userPhone, now) {
   console.log(`Iniciando nueva conversación para ${userPhone}`);
 
   activeSessions.set(userPhone, {
-    step: 'MENU',
+    step: STATUS.MENU,
     lastInteraction: now,
     orderData: {}
   });
 
-  const config = await getConfig();
-
-  await client.sendText(userPhone, config.bienvenida)
-  await client.sendText(userPhone,
-    "¡Hola! 👋 Bienvenido a *LaChapitaMDP*. \n\n" +
-    "1. 🕒 Horarios\n" +
-    "2. 💰 Consultar precio\n" +
-    "3. 🛍️ Realizar pedido\n\n" +
-    "Escribí el número de la opción (1/2/3):"
-  );
+  await sendWelcome(client, userPhone);
 }
 
-async function getConfig() {
-  const { data, error } = await supabase
-    .from('config')
-    .select('*')
-    .single();
 
-  if (error) console.error('Error cargando config:', error);
-  return data;
+module.exports = {
+  STATUS
 }

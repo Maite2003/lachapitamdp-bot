@@ -1,4 +1,4 @@
-import { readRows, formatRows, updateSupabase } from '@/app/services/sync';
+import { readRows, formatRows, updateSupabase } from '@/app/api/sync/utils';
 import { NextResponse } from 'next/server';
 
 import { GoogleSheetRow, Product } from '@/types/sheet';
@@ -7,10 +7,10 @@ export async function GET() {
   try {
     const rows: GoogleSheetRow[]|null  = await readRows()
 
-    if (!rows || rows.length === 0) {
+    if (!rows || rows.length <= 1) {
       return NextResponse.json({ message: "La planilla está vacía" });
     }
-
+    
     const products: Product[] = await formatRows(rows)
 
     await updateSupabase(products)

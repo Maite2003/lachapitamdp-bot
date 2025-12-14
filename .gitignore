@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 /bot/node_modules
+/bot/tokens
 /.pnp
 .pnp.*
 .yarn/*
